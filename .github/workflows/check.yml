@@ -1,0 +1,28 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  syntax-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Node syntax
+        run: node -e "import('./lib/index.js').then((m) => { if (typeof m.apply !== 'function') throw new Error('apply() missing') })"
+
+      - name: Python syntax
+        run: python -m py_compile scripts/prune-orphans.py scripts/watch-installs.py
+
+      - name: Plugin smoke test
+        run: node test/smoke.mjs

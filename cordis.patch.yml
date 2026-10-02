@@ -1,0 +1,4 @@
+# dsh-store-prune — pnpm store 孤儿清理（随 profile 启停）
+- insert:
+    - id: store-prune
+      name: dsh-store-prune

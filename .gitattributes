@@ -1,0 +1,6 @@
+# Keep the working tree byte-identical on every platform: these files are LF in the repo
+# and stay LF on checkout, so a checkout can never rewrite a hardlinked engine by accident.
+* text=auto eol=lf
+*.pyc binary
+*.png binary
+*.ico binary

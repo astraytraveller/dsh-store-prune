@@ -1,0 +1,50 @@
+{
+  "name": "dsh-store-prune",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "DSH profile plugin that reclaims pnpm store space by sweeping orphaned packages while the profile is running.",
+  "license": "MIT",
+  "author": "astraytraveller",
+  "homepage": "https://github.com/astraytraveller/dsh-store-prune#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/astraytraveller/dsh-store-prune.git"
+  },
+  "bugs": {
+    "url": "https://github.com/astraytraveller/dsh-store-prune/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "pnpm",
+    "pnpm-store",
+    "prune",
+    "orphans",
+    "disk-space",
+    "windows"
+  ],
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js"
+  },
+  "files": [
+    "lib",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node test/smoke.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

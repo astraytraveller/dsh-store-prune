@@ -1,0 +1,11 @@
+# runtime state, never published
+logs/
+__pycache__/
+*.pyc
+*.log
+*.log.old
+node_modules/
+
+# engine backups / scratch
+*.bak-*
+temp/
