@@ -29,3 +29,6 @@ jobs:
 
       - name: Watcher trigger-state test
         run: node test/watcher-state.mjs
+
+      - name: Store detection test
+        run: node test/store-detect.mjs

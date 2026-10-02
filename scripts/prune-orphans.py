@@ -59,6 +59,29 @@ def default_store_for(anchor: str) -> str:
     return f"{drive}\\.pnpm-store\\v11"
 
 
+# pnpm writes node_modules/.modules.yaml as JSON-flavoured YAML: the key is quoted and
+# indented, and the line ends with a comma because more keys follow --
+#     "storeDir": "C:\\Users\\you\\AppData\\Local\\pnpm\\store\\v11",
+# 1.1.0 only matched a bare top-level `storeDir:`, so detection never fired and every
+# run silently fell through to the drive default. Both spellings are accepted here.
+STORE_DIR_LINE = re.compile(
+    r"""^[ \t]*["']?storeDir["']?[ \t]*:[ \t]*(?P<value>"(?:[^"\\]|\\.)*"|'[^']*'|[^,\r\n]+)""",
+    re.M,
+)
+
+
+def yaml_scalar(raw: str) -> str:
+    """Undo YAML/JSON scalar quoting so an escaped Windows path comes back with single separators."""
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        # a double-quoted scalar escapes backslashes and quotes
+        return value[1:-1].replace("\\\\", "\\").replace('\\"', '"')
+    if len(value) >= 2 and value[0] == value[-1] == "'":
+        # a single-quoted scalar escapes only the quote itself
+        return value[1:-1].replace("''", "'")
+    return value
+
+
 def store_from_modules_yaml(project: str) -> str | None:
     """`node_modules/.modules.yaml` records the storeDir a project was installed from."""
     path = os.path.join(project, "node_modules", ".modules.yaml")
@@ -69,12 +92,10 @@ def store_from_modules_yaml(project: str) -> str | None:
             text = fh.read()
     except OSError:
         return None
-    m = re.search(r'^storeDir:\s*"?([^"\r\n]+)"?\s*$', text, re.M)
+    m = STORE_DIR_LINE.search(text)
     if not m:
         return None
-    value = m.group(1).strip().strip("'\"")
-    # yaml escapes backslashes in double-quoted scalars
-    return value.replace("\\\\", "\\")
+    return yaml_scalar(m.group("value")) or None
 
 
 def resolve_store(projects: list[str], explicit: str | None) -> tuple[str, str]:

@@ -42,7 +42,7 @@
 dsh plugin --profile web add github:astraytraveller/dsh-store-prune
 
 # 想锁定版本就带上 tag 或 commit
-dsh plugin --profile web add github:astraytraveller/dsh-store-prune#v1.1.0
+dsh plugin --profile web add github:astraytraveller/dsh-store-prune#v1.1.1
 
 # 卸载
 dsh plugin --profile web remove dsh-store-prune
@@ -112,7 +112,7 @@ prune-orphans.py [--execute] [--store PATH] [--project DIR]... [--min-protected 
 ```
 
 - `--project DIR`（可重复）—— 其包受保护的项目。默认：所有带 `node_modules` 的 `$DSH_HOME\profiles\*\`，加上当前目录。
-- `--store PATH` —— 覆盖 store 检测。默认顺序：第一个受保护项目的 `node_modules\.modules.yaml` → 其中的 `storeDir`；否则用盘符默认值（`C:` → `%LOCALAPPDATA%\pnpm\store\v11`，其他盘 → `<盘符>:\.pnpm-store\v11`）。
+- `--store PATH` —— 覆盖 store 检测。默认顺序：第一个受保护项目的 `node_modules\.modules.yaml` → 其中的 `storeDir`；否则用盘符默认值（`C:` → `%LOCALAPPDATA%\pnpm\store\v11`，其他盘 → `<盘符>:\.pnpm-store\v11`）。pnpm 可能写出的两种写法都能识别：它常用的带引号、带缩进的 `"storeDir": "C:\\...\\store\\v11",`，以及顶层裸写的 `storeDir:`。
 - `--plan FILE` —— 把完整计划（文件 / 索引行 / exec 缓存）导出为 JSON。
 - 退出码：**0** 正常，**3** 被安全轨拒绝，**1** 出错。
 
@@ -134,16 +134,20 @@ prune-orphans.py [--execute] [--store PATH] [--project DIR]... [--min-protected 
 ## 测试
 
 ```powershell
-npm test          # test/smoke.mjs + test/watcher-state.mjs
+npm test          # test/smoke.mjs + test/watcher-state.mjs + test/store-detect.mjs
 ```
 
 `test/smoke.mjs` 会建一个临时 `scripts/` 目录（里面是桩 Python 文件），用一个假的 `ctx` 加载插件，断言子进程带着预期参数被启动、`plugin.log` 有记录、disposer 能杀掉它。
 
 `test/watcher-state.mjs` 用桩引擎（`--engine`）、临时 `DSH_HOME` 和临时 `--log` 直接驱动**真正的监视器脚本**，全程不读不写任何真实 pnpm store。它把跨重启的行为钉死：没有监视器时发生的改动，重启后必须仍然被看见、必须被持久化为 pending、还要能再熬过一次重启并最终被清理；同时持久化的「上次运行时间」依然执行 `--cooldown`，损坏的状态文件则退化成重新拍基线而不是让循环崩掉。
 
-两个测试在没有可用 Python 解释器时都跳过（exit 0）。跑监视器测试时最好没有 pnpm 进程在跑 —— 监视器在有 pnpm 活着时会故意重新武装而不是清理。
+`test/store-detect.mjs` 按路径导入引擎、直接问它 store 在哪，用的临时目录里造了一批 `node_modules\.modules.yaml` 样本：pnpm 真实的带引号带缩进写法、同样内容但 CRLF 换行、只有 `virtualStoreDir` 的文件、顶层裸写的 `storeDir:`、以及根本没有 `.modules.yaml` 的项目。它不碰任何真实 store，也不需要 pnpm 进程在跑。把 `DSH_STORE_PRUNE_ENGINE` 指向另一份引擎副本，同一批检查就会跑在它上面 —— 跑在 1.1.0 的检测器上会失败，跑在当前版本上通过。
 
-诚实的进度说明：插件层与监视器的触发状态由上面两个测试覆盖，引擎由 dry-run 加开发机上的受控 `--execute` 验证过（2026-10-02 那次清理在 722 MB 的 store 里删掉 288 个 CAS 文件 / 2.0 MB）。唯一长期没有观察到的是**「装插件 → 静默 → 跨 profile 重启完成清理」**这条链路，而这正是 1.1.0 修掉的问题：2026-10-02 那次 `dsh plugin add` 在 profile 重启前 53 秒落地，接任的监视器重新拍了基线，留下的 42 个 CAS 文件 / 399 KB（外加 1 个 `-exec` 缓存 / 1.5 KB）一直躺到手工补扫。`test/watcher-state.mjs` 跑在 1.0.0 的监视器上会失败，跑在当前版本上通过。
+三个测试在没有可用 Python 解释器时都跳过（exit 0）。跑监视器测试时最好没有 pnpm 进程在跑 —— 监视器在有 pnpm 活着时会故意重新武装而不是清理。
+
+诚实的进度说明：插件层与监视器的触发状态由上面这些测试覆盖，引擎由 dry-run 加开发机上的受控 `--execute` 验证过（2026-10-02 那次清理在 722 MB 的 store 里删掉 288 个 CAS 文件 / 2.0 MB）。唯一长期没有观察到的是**「装插件 → 静默 → 跨 profile 重启完成清理」**这条链路，而这正是 1.1.0 修掉的问题：2026-10-02 那次 `dsh plugin add` 在 profile 重启前 53 秒落地，接任的监视器重新拍了基线，留下的 42 个 CAS 文件 / 399 KB（外加 1 个 `-exec` 缓存 / 1.5 KB）一直躺到手工补扫。`test/watcher-state.mjs` 跑在 1.0.0 的监视器上会失败，跑在当前版本上通过。
+
+1.1.1 修的是一个更安静的问题 —— 它不是在运行时暴露的，而是手动去看某个 profile 的 `node_modules\.modules.yaml` 才发现的：检测用的正则只认顶层裸写的 `storeDir:`，而 pnpm 实际写成带引号、带缩进的样子 —— `  "storeDir": "C:\\Users\\you\\AppData\\Local\\pnpm\\store\\v11",`。于是检测从来没命中过，每次运行都静默退回到盘符默认值。作者这台机器上默认值恰好就是正确的 store，这正是它一直看起来「没问题」的原因；而如果 profile 是从别的盘的 store（或带 `--store`）装出来的，清理就会指向错的目录。`test/store-detect.mjs` 跑在 1.1.0 的引擎上会失败，跑在当前版本上通过。
 
 ## 许可
 

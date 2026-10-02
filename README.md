@@ -44,7 +44,7 @@ On top of that, every run is guarded by:
 dsh plugin --profile web add github:astraytraveller/dsh-store-prune
 
 # pin a tag or commit if you prefer
-dsh plugin --profile web add github:astraytraveller/dsh-store-prune#v1.1.0
+dsh plugin --profile web add github:astraytraveller/dsh-store-prune#v1.1.1
 
 # uninstall
 dsh plugin --profile web remove dsh-store-prune
@@ -114,7 +114,7 @@ prune-orphans.py [--execute] [--store PATH] [--project DIR]... [--min-protected 
 ```
 
 - `--project DIR` (repeatable) — projects whose packages are protected. Default: every `$DSH_HOME\profiles\*\` that has a `node_modules`, plus the current directory.
-- `--store PATH` — override store detection. Default order: the first protected project's `node_modules\.modules.yaml` → its `storeDir`; otherwise a drive default (`C:` → `%LOCALAPPDATA%\pnpm\store\v11`, other drives → `<drive>:\.pnpm-store\v11`).
+- `--store PATH` — override store detection. Default order: the first protected project's `node_modules\.modules.yaml` → its `storeDir`; otherwise a drive default (`C:` → `%LOCALAPPDATA%\pnpm\store\v11`, other drives → `<drive>:\.pnpm-store\v11`). Both spellings pnpm can write are understood: its usual quoted, indented `"storeDir": "C:\\...\\store\\v11",` and a bare top-level `storeDir:`.
 - `--plan FILE` — dump the full plan (files / index rows / exec caches) as JSON.
 - Exit codes: **0** ok, **3** refused by a safety rail, **1** error.
 
@@ -136,16 +136,20 @@ Deleting store files can never break a profile by itself: a profile's `node_modu
 ## Tests
 
 ```powershell
-npm test          # test/smoke.mjs + test/watcher-state.mjs
+npm test          # test/smoke.mjs + test/watcher-state.mjs + test/store-detect.mjs
 ```
 
 `test/smoke.mjs` builds a temporary `scripts/` directory with stub Python files, loads the plugin with a fake `ctx`, and asserts that the child process is spawned with the expected arguments, that `plugin.log` records it, and that the disposer kills it.
 
 `test/watcher-state.mjs` drives the **real watcher** against a stub engine (`--engine`), a temporary `DSH_HOME` and a temporary `--log`, so no real pnpm store is ever read or written. It pins the restart behaviour: a change made while no watcher was alive is still seen after the restart, is persisted as pending, survives a further restart, and is finally swept — while the persisted last-run time still enforces `--cooldown`, and a corrupt state file falls back to a fresh baseline instead of breaking the loop.
 
-Both tests skip (exit 0) when no Python interpreter is available. The watcher test wants no pnpm process running: the watcher deliberately re-arms instead of pruning while pnpm is alive.
+`test/store-detect.mjs` imports the engine by path and asks it where the store is, against fixture `node_modules\.modules.yaml` files under a temporary directory: pnpm's real quoted/indented spelling, the same file with CRLF line endings, a `virtualStoreDir`-only file, a bare top-level `storeDir:`, and a project with no `.modules.yaml` at all. It never touches a real store and needs no pnpm process. Point `DSH_STORE_PRUNE_ENGINE` at another engine copy to run the same checks against it — they fail against the 1.1.0 detector and pass against this one.
 
-Honest status: the plugin layer and the watcher's trigger state are covered by the two tests above, and the engine is verified by dry-runs plus controlled `--execute` runs on the author's machine (on 2026-10-02 a single sweep removed 288 CAS files / 2.0 MB out of a 722 MB store). The one chain that stayed unobserved in production was **install → quiet → sweep across a profile restart** — and that is precisely what 1.1.0 fixes: on 2026-10-02 a `dsh plugin add` landed 53 s before the profile restart, the replacement watcher re-baselined the manifests, and the leftovers (42 CAS files / 399 KB plus one `-exec` cache / 1.5 KB) sat there until a manual sweep. `test/watcher-state.mjs` now fails against the 1.0.0 watcher and passes against this one.
+All three tests skip (exit 0) when no Python interpreter is available. The watcher test wants no pnpm process running: the watcher deliberately re-arms instead of pruning while pnpm is alive.
+
+Honest status: the plugin layer and the watcher's trigger state are covered by the tests above, and the engine is verified by dry-runs plus controlled `--execute` runs on the author's machine (on 2026-10-02 a single sweep removed 288 CAS files / 2.0 MB out of a 722 MB store). The one chain that stayed unobserved in production was **install → quiet → sweep across a profile restart** — and that is precisely what 1.1.0 fixes: on 2026-10-02 a `dsh plugin add` landed 53 s before the profile restart, the replacement watcher re-baselined the manifests, and the leftovers (42 CAS files / 399 KB plus one `-exec` cache / 1.5 KB) sat there until a manual sweep. `test/watcher-state.mjs` now fails against the 1.0.0 watcher and passes against this one.
+
+1.1.1 fixes a quieter one, found by reading a profile's `node_modules\.modules.yaml` by hand instead of trusting it: the detection regex only matched a bare top-level `storeDir:`, while pnpm writes the key quoted and indented — `  "storeDir": "C:\\Users\\you\\AppData\\Local\\pnpm\\store\\v11",`. Detection therefore never fired, and every run silently fell through to the drive default. On the author's machine that default happens to be the right store, which is exactly why nothing looked wrong; a profile installed from a store on another drive (or with `--store`) would have swept the wrong directory. `test/store-detect.mjs` fails against the 1.1.0 engine and passes against this one.
 
 ## License
 
