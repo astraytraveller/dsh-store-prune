@@ -26,3 +26,6 @@ jobs:
 
       - name: Plugin smoke test
         run: node test/smoke.mjs
+
+      - name: Watcher trigger-state test
+        run: node test/watcher-state.mjs

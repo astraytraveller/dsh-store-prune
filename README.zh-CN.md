@@ -42,7 +42,7 @@
 dsh plugin --profile web add github:astraytraveller/dsh-store-prune
 
 # 想锁定版本就带上 tag 或 commit
-dsh plugin --profile web add github:astraytraveller/dsh-store-prune#v1.0.0
+dsh plugin --profile web add github:astraytraveller/dsh-store-prune#v1.1.0
 
 # 卸载
 dsh plugin --profile web remove dsh-store-prune
@@ -88,12 +88,14 @@ python .\watch-installs.py --execute      # 持续监视安装活动，Ctrl+C �
 - **忙判**：有 pnpm 进程活着就跳过；
 - store 自身（`index.db`、`files\`）只参与静默判定、**绝不作为触发条件**，否则清理会触发自己陷入死循环；
 - `--cooldown`（默认 600 秒）限制运行频率，`--interval`（默认 20 秒）是轮询周期；
-- 引擎被拒绝（exit 3）时只是重新武装、等下一次。
+- 引擎被拒绝（exit 3）时只是重新武装、等下一次；
+- **触发状态能跨重启存活**：manifest 快照、「有待清理」标记和上次运行时间会落到 `logs\watch-state.json`（原子写入，默认放在 `--log` 旁边，可用 `--state` 指定）。这一点很关键，因为 `dsh plugin add` 会重启 profile、连带换掉监视器进程：新进程如果直接重新拍基线，就会把刚刚落地的这次安装当成「本来就是这样」，永远不会清它。现在新进程会拿**前任留下的快照**做比较，重新等满一个静默窗口，store 安静后照样清理。
 
 ## 看日志
 
 - `logs\plugin.log` —— 插件的启停 / 重启 / skip。
-- `logs\watcher.log` —— `install activity: <path>`、`running: ...`、`engine exit=0 {...}`、`REFUSED: ...`（超过 1 MB 轮转）。
+- `logs\watcher.log` —— `install activity: <path>`、`watch state: ...`、`running: ...`、`engine exit=0 {...}`、`REFUSED: ...`（超过 1 MB 轮转）。
+- `logs\watch-state.json` —— 上面说的触发状态；可以随便删（文件缺失或损坏只意味着下次启动重新拍一次基线）。
 
 健康的稳态运行长这样：
 
@@ -126,18 +128,22 @@ prune-orphans.py [--execute] [--store PATH] [--project DIR]... [--min-protected 
 
 1. 只清理受保护项目实际在用的那个 store。如果你在别的盘维护 profile，要为它传 `--project`（位于 `$DSH_HOME\profiles` 下的会被自动纳入）。
 2. DSH 被**强杀**（不是正常退出）时监视器可能成为孤儿进程 —— 它继续做同样的、无害的工作；下一次启动会再起一个，两者并发时引擎的 `BEGIN IMMEDIATE` 锁会让后到者拒绝执行（exit 3），不会损坏 store。
-3. profile 不在运行时没有任何清理 —— 这是设计使然：插件安装本来就只在 DSH 运行时发生。
+3. 没有监视器在跑的时候不做清理 —— 但落在这段窗口里的安装不会丢：它的 manifest 变化通过 `watch-state.json` 对下一个监视器依然可见。清理安排在 profile 运行期间是设计使然，因为插件安装本来就发生在那时。
 4. pnpm 的 `-exec`（构建缓存）文件只有在引用它的**所有**索引行都被丢弃时才删。
 
 ## 测试
 
 ```powershell
-npm test          # test/smoke.mjs：桩工具目录 + 真实 spawn + disposer 检查
+npm test          # test/smoke.mjs + test/watcher-state.mjs
 ```
 
-冒烟测试会建一个临时 `scripts/` 目录（里面是桩 Python 文件），用一个假的 `ctx` 加载插件，断言子进程带着预期参数被启动、`plugin.log` 有记录、disposer 能杀掉它；没有可用 Python 解释器时跳过（exit 0）。
+`test/smoke.mjs` 会建一个临时 `scripts/` 目录（里面是桩 Python 文件），用一个假的 `ctx` 加载插件，断言子进程带着预期参数被启动、`plugin.log` 有记录、disposer 能杀掉它。
 
-诚实的进度说明：引擎经过 dry-run 与上述冒烟测试验证，监视器的启动与参数也在开发机上验证过；但**「装插件 → 90 s → 清理」这条端到端链路尚未在生产中观察到**，因为至今每次安装都在 profile 重启前几秒就结束了。
+`test/watcher-state.mjs` 用桩引擎（`--engine`）、临时 `DSH_HOME` 和临时 `--log` 直接驱动**真正的监视器脚本**，全程不读不写任何真实 pnpm store。它把跨重启的行为钉死：没有监视器时发生的改动，重启后必须仍然被看见、必须被持久化为 pending、还要能再熬过一次重启并最终被清理；同时持久化的「上次运行时间」依然执行 `--cooldown`，损坏的状态文件则退化成重新拍基线而不是让循环崩掉。
+
+两个测试在没有可用 Python 解释器时都跳过（exit 0）。跑监视器测试时最好没有 pnpm 进程在跑 —— 监视器在有 pnpm 活着时会故意重新武装而不是清理。
+
+诚实的进度说明：插件层与监视器的触发状态由上面两个测试覆盖，引擎由 dry-run 加开发机上的受控 `--execute` 验证过（2026-10-02 那次清理在 722 MB 的 store 里删掉 288 个 CAS 文件 / 2.0 MB）。唯一长期没有观察到的是**「装插件 → 静默 → 跨 profile 重启完成清理」**这条链路，而这正是 1.1.0 修掉的问题：2026-10-02 那次 `dsh plugin add` 在 profile 重启前 53 秒落地，接任的监视器重新拍了基线，留下的 42 个 CAS 文件 / 399 KB（外加 1 个 `-exec` 缓存 / 1.5 KB）一直躺到手工补扫。`test/watcher-state.mjs` 跑在 1.0.0 的监视器上会失败，跑在当前版本上通过。
 
 ## 许可
 

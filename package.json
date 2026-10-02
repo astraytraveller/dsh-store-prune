@@ -1,6 +1,6 @@
 {
   "name": "dsh-store-prune",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "description": "DSH profile plugin that reclaims pnpm store space by sweeping orphaned packages while the profile is running.",
   "license": "MIT",
@@ -40,7 +40,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node test/smoke.mjs"
+    "test": "node test/smoke.mjs && node test/watcher-state.mjs"
   },
   "dsh": {
     "bundle": {

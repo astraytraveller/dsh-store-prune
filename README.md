@@ -44,7 +44,7 @@ On top of that, every run is guarded by:
 dsh plugin --profile web add github:astraytraveller/dsh-store-prune
 
 # pin a tag or commit if you prefer
-dsh plugin --profile web add github:astraytraveller/dsh-store-prune#v1.0.0
+dsh plugin --profile web add github:astraytraveller/dsh-store-prune#v1.1.0
 
 # uninstall
 dsh plugin --profile web remove dsh-store-prune
@@ -90,12 +90,14 @@ The watcher itself:
 - **busy check** — skips while a pnpm process is alive;
 - **store paths participate in quiescence only, never as a trigger**, otherwise a cleanup would re-trigger itself forever;
 - `--cooldown` (600 s) floors the run rate, `--interval` (20 s) is the polling period;
-- if the engine refuses (exit 3), the trigger is re-armed for the next round.
+- if the engine refuses (exit 3), the trigger is re-armed for the next round;
+- **state survives restarts** — the manifest snapshot, the pending trigger and the last run time are persisted to `logs\watch-state.json` (written atomically, next to `--log` unless `--state` says otherwise). This matters because `dsh plugin add` restarts the profile and therefore replaces the watcher: a fresh process that simply re-baselined the manifests would score the install that had just landed as "it has always been like that" and never clean up after it. Now the next instance compares against the snapshot its predecessor left behind, re-applies a full quiet window, and still gets swept once the store is quiet.
 
 ## Logs
 
 - `logs\plugin.log` — plugin start/stop/restart/skip lines.
-- `logs\watcher.log` — `install activity: <path>`, `running: ...`, `engine exit=0 {...}`, `REFUSED: ...` (rotated at 1 MB).
+- `logs\watcher.log` — `install activity: <path>`, `watch state: ...`, `running: ...`, `engine exit=0 {...}`, `REFUSED: ...` (rotated at 1 MB).
+- `logs\watch-state.json` — the trigger state described above; safe to delete (a missing or corrupt file just means the next start takes a fresh baseline).
 
 A healthy steady state looks like:
 
@@ -128,18 +130,22 @@ Deleting store files can never break a profile by itself: a profile's `node_modu
 
 1. Only the store actually used by a protected project is cleaned. If you keep profiles on another drive, pass `--project` for them (profiles under `$DSH_HOME\profiles` are picked up automatically).
 2. If DSH is **force-killed**, the watcher may survive as an orphan process. It keeps doing the same harmless work; on the next start a second watcher appears and the engine's `BEGIN IMMEDIATE` lock makes the later one refuse (exit 3). No corruption.
-3. Nothing is cleaned while the profile is not running — by design, since plugin installs only happen while DSH runs.
+3. Nothing is cleaned while no watcher is running — but an install that lands in that window is not lost either: its manifest change is still visible to the next watcher through `watch-state.json`. By design the sweep happens while a profile runs, since that is when installs happen.
 4. pnpm's `-exec` build caches are only deleted once **all** index rows referencing them are dropped.
 
 ## Tests
 
 ```powershell
-npm test          # test/smoke.mjs: stub tool dir, real spawn, disposer check
+npm test          # test/smoke.mjs + test/watcher-state.mjs
 ```
 
-The smoke test builds a temporary `scripts/` directory with stub Python files, loads the plugin with a fake `ctx`, and asserts that the child process is spawned with the expected arguments, that `plugin.log` records it, and that the disposer kills it. It skips (exit 0) when no Python interpreter is available.
+`test/smoke.mjs` builds a temporary `scripts/` directory with stub Python files, loads the plugin with a fake `ctx`, and asserts that the child process is spawned with the expected arguments, that `plugin.log` records it, and that the disposer kills it.
 
-Honest status: the engine is verified by dry-runs and the smoke test above, and the watcher's start-up/parameters were verified on the author's machine — but the full **install → 90 s → sweep** chain has not yet been observed in production there, because every install so far finished within seconds of a profile restart.
+`test/watcher-state.mjs` drives the **real watcher** against a stub engine (`--engine`), a temporary `DSH_HOME` and a temporary `--log`, so no real pnpm store is ever read or written. It pins the restart behaviour: a change made while no watcher was alive is still seen after the restart, is persisted as pending, survives a further restart, and is finally swept — while the persisted last-run time still enforces `--cooldown`, and a corrupt state file falls back to a fresh baseline instead of breaking the loop.
+
+Both tests skip (exit 0) when no Python interpreter is available. The watcher test wants no pnpm process running: the watcher deliberately re-arms instead of pruning while pnpm is alive.
+
+Honest status: the plugin layer and the watcher's trigger state are covered by the two tests above, and the engine is verified by dry-runs plus controlled `--execute` runs on the author's machine (on 2026-10-02 a single sweep removed 288 CAS files / 2.0 MB out of a 722 MB store). The one chain that stayed unobserved in production was **install → quiet → sweep across a profile restart** — and that is precisely what 1.1.0 fixes: on 2026-10-02 a `dsh plugin add` landed 53 s before the profile restart, the replacement watcher re-baselined the manifests, and the leftovers (42 CAS files / 399 KB plus one `-exec` cache / 1.5 KB) sat there until a manual sweep. `test/watcher-state.mjs` now fails against the 1.0.0 watcher and passes against this one.
 
 ## License
 
